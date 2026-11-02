@@ -1,6 +1,6 @@
 # common-lib
 
-Shared Go service components for configuration, logging, PostgreSQL, metrics, tracing, HTTP middleware, health checks, server lifecycle, and typed errors.
+Shared Go service components for configuration, PostgreSQL/MongoDB/Redis/Kafka clients and migrations, logging, metrics, tracing, HTTP middleware, health checks, server lifecycle, and typed errors.
 
 This is the standalone Go module `github.com/MayurJ1609/common-lib`. Add it to a service with:
 
@@ -10,12 +10,12 @@ go get github.com/MayurJ1609/common-lib
 
 ## Packages
 
-- `config`: load a YAML/JSON/TOML or `.env` configuration file with Viper and override values from environment variables.
+- `config`: load a YAML/JSON/TOML or `.env` configuration file with Viper and override values from environment variables; `LoadDependencyConfig` loads the shared PostgreSQL, MongoDB, Redis, and Kafka settings from `.env.example` or the environment.
 - `logger`: create a JSON `slog` logger with service and level options.
-- `db`: create and ping a pgx connection pool.
+- `db`: create and ping a pgx connection pool; connect PostgreSQL, MongoDB, Redis, and Kafka; apply embedded PostgreSQL migrations; and expose health, cache, and publish operations.
 - `metrics`: create a private Prometheus registry with Go/process collectors, HTTP request metrics, and an optional pgx pool collector.
 - `tracing`: configure an OTLP/gRPC OpenTelemetry trace provider.
-- `httpx`: compose request ID, structured request logging, Prometheus metrics, and panic recovery middleware.
+- `httpx`: compose request ID, structured request logging, Prometheus metrics, OpenTelemetry tracing, and panic recovery middleware.
 - `health`: register liveness and dependency readiness endpoints.
 - `server`: run an HTTP server until cancellation and gracefully shut it down.
 - `errors`: create shared errors with machine-readable codes and wrapped causes.
@@ -47,6 +47,10 @@ cfg, err := config.Load[Config](config.Options{
 ```
 
 The file may be YAML, JSON, TOML, or dotenv, based on its extension. Environment variables override file values; the example field maps to `APP_HTTP_ADDR`.
+
+`config.LoadDependencyConfig` provides shared backend settings for services that use `db.Connect`. It reads `.env.example` from the process working directory, then applies non-empty environment variable overrides.
+
+The database lifecycle runs the migrations embedded in `db/migrations/sql/` and initializes configured MongoDB collections and the Kafka topic. Applications should add their own migration SQL there when adopting the common database bundle.
 
 ## Development
 

@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/MayurJ1609/common-lib/metrics"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestRequestIDAndMetricsMiddleware(t *testing.T) {
@@ -46,6 +50,28 @@ func TestRequestIDAndMetricsMiddleware(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `test_http_requests_total{method="GET",route="GET unknown",status="202"} 1`) {
 		t.Fatalf("metrics output does not contain observed request: %s", body)
+	}
+}
+
+func TestTracingMiddlewareCreatesServerSpan(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	provider := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	var spanValid bool
+	handler := TracingMiddleware()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		spanValid = trace.SpanFromContext(r.Context()).SpanContext().IsValid()
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/items", nil))
+
+	if !spanValid {
+		t.Fatal("request did not receive an OpenTelemetry span")
 	}
 }
 

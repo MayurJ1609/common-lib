@@ -8,8 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/MayurJ1609/common-lib/metrics"
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Middleware func(http.Handler) http.Handler
@@ -74,6 +79,34 @@ func MetricsMiddleware(registry *metrics.Registry) Middleware {
 				status = http.StatusOK
 			}
 			registry.ObserveHTTP(r.Method, routeName(r), status, time.Since(start))
+		})
+	}
+}
+
+func TracingMiddleware() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+			ctx, span := otel.Tracer("github.com/MayurJ1609/common-lib/httpx").Start(
+				ctx,
+				r.Method+" "+routeName(r),
+				trace.WithSpanKind(trace.SpanKindServer),
+				trace.WithAttributes(
+					attribute.String("http.request.method", r.Method),
+					attribute.String("url.path", r.URL.Path),
+				),
+			)
+			defer span.End()
+			recorder := &statusWriter{ResponseWriter: w}
+			next.ServeHTTP(recorder, r.WithContext(ctx))
+			status := recorder.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			span.SetAttributes(attribute.Int("http.response.status_code", status))
+			if status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, http.StatusText(status))
+			}
 		})
 	}
 }
