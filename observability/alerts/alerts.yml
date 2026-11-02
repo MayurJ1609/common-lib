@@ -1,0 +1,19 @@
+groups:
+  - name: service-template
+    rules:
+      - alert: ServiceHighHTTP5xxRate
+        expr: sum(rate(service_http_requests_total{status=~"5.."}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Service is returning HTTP 5xx responses.
+          description: The service has returned HTTP 5xx responses for at least two minutes.
+      - alert: ServiceHighHTTPP95Latency
+        expr: histogram_quantile(0.95, sum by (le) (rate(service_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Service HTTP p95 latency is above one second.
+          description: HTTP p95 latency has exceeded one second for at least five minutes.
