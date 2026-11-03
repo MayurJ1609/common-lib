@@ -39,3 +39,30 @@ func TestLoadFileWithEnvironmentOverride(t *testing.T) {
 		t.Fatalf("HTTPAddr = %q, want environment override :8081", got.HTTPAddr)
 	}
 }
+
+func TestLoadNestedEnvironmentAndIgnoredFields(t *testing.T) {
+	t.Setenv("APP_DATABASE_HOST", "db.internal")
+
+	type database struct {
+		Host string `mapstructure:"host"`
+	}
+	type settings struct {
+		Database database `mapstructure:"database"`
+		Ignored  string   `mapstructure:"-"`
+		internal string
+	}
+	got, err := Load[settings](Options{EnvPrefix: "APP"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Database.Host != "db.internal" {
+		t.Fatalf("Database.Host = %q, want db.internal", got.Database.Host)
+	}
+}
+
+func TestLoadReportsConfigFileError(t *testing.T) {
+	_, err := Load[struct{}](Options{File: filepath.Join(t.TempDir(), "missing.yaml")})
+	if err == nil {
+		t.Fatal("Load() succeeded for a missing config file")
+	}
+}

@@ -77,6 +77,32 @@ func TestLoadDependencyConfigRejectsInvalidRedisDB(t *testing.T) {
 	}
 }
 
+func TestLoadDependencyConfigRejectsNegativeRedisDBAndEmptyBrokers(t *testing.T) {
+	t.Setenv("REDIS_DB", "-1")
+	if _, err := LoadDependencyConfig(); err == nil {
+		t.Fatal("LoadDependencyConfig() accepted negative REDIS_DB")
+	}
+	t.Setenv("REDIS_DB", "0")
+	t.Setenv("KAFKA_BROKERS", ", ,")
+	if _, err := LoadDependencyConfig(); err == nil {
+		t.Fatal("LoadDependencyConfig() accepted an empty broker list")
+	}
+}
+
+func TestLoadDependencyEnvFileParsesExportAndQuotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("# comment\n\nexport KEY = \"quoted value\"\nOTHER='single quoted'\n"), 0600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	got, err := loadDependencyEnvFile(path)
+	if err != nil {
+		t.Fatalf("loadDependencyEnvFile() error = %v", err)
+	}
+	if got["KEY"] != "quoted value" || got["OTHER"] != "single quoted" {
+		t.Fatalf("loaded values = %v, want unquoted values", got)
+	}
+}
+
 func TestLoadDependencyConfigReadsEnvExample(t *testing.T) {
 	tempDir := t.TempDir()
 	envFile := "POSTGRES_DSN=postgres://file-value\nREDIS_ADDR=redis-from-file:6379\n"

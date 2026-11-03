@@ -11,7 +11,9 @@ import (
 
 	"github.com/MayurJ1609/common-lib/metrics"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -86,5 +88,100 @@ func TestRecoverMiddleware(t *testing.T) {
 
 	if got := recorder.Code; got != http.StatusInternalServerError {
 		t.Fatalf("response status = %d, want %d", got, http.StatusInternalServerError)
+	}
+}
+
+func TestLoggingMiddlewareAndResponseWriter(t *testing.T) {
+	var output strings.Builder
+	log := slog.New(slog.NewTextHandler(&output, nil))
+	handler := LoggingMiddleware(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/items", nil))
+
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" {
+		t.Fatalf("response = %d %q, want 200 ok", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(output.String(), "status=200") {
+		t.Fatalf("log output %q does not contain default status", output.String())
+	}
+
+	writer := &statusWriter{ResponseWriter: httptest.NewRecorder()}
+	if got, err := writer.Write([]byte("body")); err != nil || got != len("body") {
+		t.Fatalf("Write() = %d, %v; want %d, nil", got, err, len("body"))
+	}
+	if writer.status != http.StatusOK {
+		t.Fatalf("implicit status = %d, want %d", writer.status, http.StatusOK)
+	}
+	if writer.Unwrap() != writer.ResponseWriter {
+		t.Fatal("Unwrap() did not return the underlying response writer")
+	}
+}
+
+func TestRequestIDValidationAndRouteName(t *testing.T) {
+	for _, id := range []string{"", "contains space", strings.Repeat("x", 129), "line\nbreak"} {
+		if validRequestID(id) {
+			t.Errorf("validRequestID(%q) = true, want false", id)
+		}
+	}
+	for _, id := range []string{"id", strings.Repeat("x", 128)} {
+		if !validRequestID(id) {
+			t.Errorf("validRequestID(%q) = false, want true", id)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/items/42", nil)
+	if got := routeName(request); got != "GET unknown" {
+		t.Fatalf("routeName() = %q, want GET unknown", got)
+	}
+	request.Pattern = "GET /items/{id}"
+	if got := routeName(request); got != "GET /items/{id}" {
+		t.Fatalf("routeName() = %q, want registered route", got)
+	}
+}
+
+func TestRequestIDMiddlewareReplacesInvalidID(t *testing.T) {
+	handler := RequestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := RequestID(r.Context()); got == "" || got == "invalid id" {
+			t.Errorf("generated request ID = %q, want non-empty valid ID", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("X-Request-ID", "invalid id")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("X-Request-ID"); got == "" || got == "invalid id" {
+		t.Fatalf("response request ID = %q, want generated ID", got)
+	}
+}
+
+func TestTracingMiddlewareMarksServerErrors(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	handler := TracingMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/items", nil)
+	request.Pattern = "GET /items"
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("got %d ended spans, want 1", len(spans))
+	}
+	if spans[0].Status().Code != codes.Error {
+		t.Fatalf("span status = %v, want error", spans[0].Status().Code)
 	}
 }
